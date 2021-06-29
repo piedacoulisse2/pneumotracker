@@ -1,10 +1,13 @@
 # Build dataframe for dataset
-    
-import os
 
+import os
 import pandas as pd
+import numpy as np
+import cv2
+from tqdm import tqdm
 
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
 
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
@@ -34,12 +37,13 @@ Returns:
             print('Path doesn\'t exist, please input a valid directory path.\n')
 
     seg_path = input('\nInput root path for segmented images if exists or needs creation:\n')
-    if not os.path.exists(seg_path):
+    if (seg_path is not None) and (not os.path.exists(seg_path)):
         create_dir = 'Z'
         while create_dir not in ['Y', 'N']:
-            create_dir = input('Path doesn\'t exist, would you like to create it (Y or N)?\n')
+            create_dir = input('Path doesn\'t exist, would you like to create folder structure for ' + seg_path + ' (Y or N)?\n')
         if create_dir == 'Y':
-            os.makedirs(seg_path)
+            for dirname, _, filenames in os.walk(orig_path):
+                os.makedirs(dirname.replace(orig_path, seg_path))           
             if os.path.exists(seg_path):
                 print('Directory created.')
             else:
@@ -74,8 +78,6 @@ Returns DataFrame df with columns:
     
     list_df = []
     
-    print('Building dataset DataFrame')
-    
     if df is not None:
         if (path_seg is None) or (seg_img_ext is None):
             print('Arguments path_seg and seg_img_ext are mandatory if df is passed.')
@@ -86,7 +88,7 @@ Returns DataFrame df with columns:
             df['Filepath_seg'] = df['Filepath_orig'].apply(lambda x: x.replace(path_orig, path_seg).replace(orig_img_ext, seg_img_ext))
     else:
         for dirname, _, filenames in os.walk(path_orig):
-            for filename in filenames:
+            for filename in tqdm(filenames, disable=len(filenames)==0):
                 if ('.' + orig_img_ext) in filename:
                     list_val = []
                     list_val.append('PNEUMONIA' if 'PNEUMONIA' in dirname else 'NORMAL')
@@ -105,10 +107,12 @@ Returns DataFrame df with columns:
                     list_df.append(list_val)
 
         df = pd.DataFrame(list_df, columns = ['Label_name', 'Label_int', 'Label_pathology', 'Label_pathology_int', 'Filename_orig', 'Filepath_orig', 'Filename_seg', 'Filepath_seg'])
+        
+    print('Done')
     
     return df
     
-def build_train_model(X, Y, model, classes = 2, batch_size = 32, epochs = 20, checkpoint_name = 'checkpoint.h5', history_name = 'history'):
+def build_train_model(X, Y, model, classes = 2, batch_size = 32, epochs = 20, checkpoint_name = 'checkpoint.h5', history_name = 'history', train_model = True):
     
     """
 Builds, trains and evaluates model. Saves training history in a DataFrame and model in a checkpoint h5 file :
@@ -118,18 +122,22 @@ Builds, trains and evaluates model. Saves training history in a DataFrame and mo
     - Builds callbacks.
 
 Parameters:
-    - X: pandas Series containing filepaths to images.
-    - Y: pandas Series containing labels for images.
-    - model: model to train and evaluate.
-    - classes (Optional): number of classes, 2 by default (NORMAL & PNEUMONIA).
-    - batch_size (Optional): batch_size for training, validation and testing datasets, 32 by default.
-    - epochs (Optional): number of epochs for model training, 20 by default.
-    - checkpoint_name (Optional): name for model training checkpoint, "checkpoint.h5" by default.
+    - X: pandas Series containing filepaths to images
+    - Y: pandas Series containing labels for images
+    - model: model to train and evaluate
+    - classes (Optional): number of classes, 2 by default (NORMAL & PNEUMONIA)
+    - batch_size (Optional): batch_size for training, validation and testing datasets, 32 by default
+    - epochs (Optional): number of epochs for model training, 20 by default
+    - checkpoint_name (Optional): name for model training checkpoint, "checkpoint.h5" by default
     - history_name (Optional): name for history DataFrame, "checkpoint.h5" by default.
+    - train_model : model is trained if True, else simply loaded from checkpoint and metrics are computed
     
 Returns:
     - model evaluation
     - model training history
+    - classification_report
+    - confusion matrix
+    - model
     """
 
     print('\nSplitting data')
@@ -191,50 +199,63 @@ Returns:
                                              batch_size = batch_size,
                                              class_mode = class_mode,
                                              shuffle = False)
-        
-    print('\nComputing Class weights')
-    train_count = df_train.shape[0]
-    class_weight = {}
-    for i in range(classes):
-        class_weight[i] = (1 / df_train[df_train[Y.name] == classes_list[i]][Y.name].count())*(train_count)/float(classes)
-        print('Weight for class', classes_list[i], ': {:.2f}'.format(class_weight[i]))
+    
+    if train_model:
+    
+        print('\nComputing Class weights')
+        train_count = df_train.shape[0]
+        class_weight = {}
+        for i in range(classes):
+            class_weight[i] = (1 / df_train[df_train[Y.name] == classes_list[i]][Y.name].count())*(train_count)/float(classes)
+            print('Weight for class', classes_list[i], ': {:.2f}'.format(class_weight[i]))
 
-    print('\nBuilding callbacks:')
-    print('Checkpoint')
-    checkpoint = ModelCheckpoint(checkpoint_name,
-                                 monitor="loss",
-                                 verbose=2,
-                                 save_best_only=True,
-                                 save_weights_only=False)
+        print('\nBuilding callbacks:')
+        print('Checkpoint')
+        checkpoint = ModelCheckpoint(checkpoint_name,
+                                     monitor="loss",
+                                     verbose=2,
+                                     save_best_only=True,
+                                     save_weights_only=False)
 
-    print('Reduce learning rate on plateau')
-    lr_plateau = ReduceLROnPlateau(monitor = 'loss',
-                                   patience = 2,
+        print('Reduce learning rate on plateau')
+        lr_plateau = ReduceLROnPlateau(monitor = 'loss',
+                                       patience = 2,
+                                       verbose = 2,
+                                       mode = 'min')
+
+        print('Early stopping for val_loss')
+        early_stop = EarlyStopping(monitor = 'val_loss',
+                                   patience = 5,
                                    verbose = 2,
                                    mode = 'min')
+        
+        print('\nBuilding model')
+        optimizer = Adam()
+        model.compile(optimizer = optimizer,
+                      loss = loss_function,
+                      metrics = ['accuracy'])
+        model.summary()
 
-    print('Early stopping for val_loss')
-    early_stop = EarlyStopping(monitor = 'val_loss',
-                               patience = 5,
-                               verbose = 2,
-                               mode = 'min')
+        print('\nTraining model')
+        history = model.fit(train_generator,
+                            epochs = epochs,
+                            steps_per_epoch = train_generator.n//batch_size,
+                            validation_data = valid_generator,
+                            validation_steps = valid_generator.n//batch_size,
+                            callbacks = [checkpoint, lr_plateau, early_stop],
+                            class_weight = class_weight)
     
-    print('\nBuilding model')
-    optimizer = Adam()
-    model.compile(optimizer = optimizer,
-                  loss = loss_function,
-                  metrics = ['accuracy'])
-    model.summary()
+        hist_df = pd.DataFrame(history.history)
 
-    print('\nTraining model')
-    history = model.fit(train_generator,
-                        epochs = epochs,
-                        steps_per_epoch = train_generator.n//batch_size,
-                        validation_data = valid_generator,
-                        validation_steps = valid_generator.n//batch_size,
-                        callbacks = [checkpoint, lr_plateau, early_stop],
-                        class_weight = class_weight)
+        with open(history_name, mode='w') as f:
+            hist_df.to_csv(f)
 
+    if os.path.exists(history_name):
+        history = pd.read_csv(history_name, index_col = 0)
+    else:
+        print('history doesn\'t exist')
+        history = None
+    
     model = load_model(checkpoint_name)
 
     print('\nEvaluating model')
@@ -243,13 +264,72 @@ Returns:
     print("Loss: " , model_eval[0])
 
     print("Accuracy: " , model_eval[1]*100 , "%")
-
-    hist_df = pd.DataFrame(history.history)
-
-    with open(history_name + '.csv', mode='w') as f:
-        hist_df.to_csv(f)
     
-    return model_eval, history
+    df_val['predicted_value'] = model.predict(test_generator)
+    df_val['predicted_int'] = (df_val['predicted_value'] > 0.5).apply(int)
+    df_val['predicted_str'] = df_val['predicted_int'].apply(lambda x: 'NORMAL' if x == 0 else 'PNEUMONIA')
+    class_report = pd.DataFrame(classification_report(df_val['Label_name'], df_val['predicted_str'], output_dict = True))
+    conf_matrix = pd.crosstab(df_val['Label_name'], df_val['predicted_str'], rownames=['Real'], colnames=['Predicted'])
+    
+    return model_eval, history, class_report, conf_matrix, model
+
+    
+# Functions for image segmentation
+# Main function is segment_image
+# Other functions are used by segment_image
+
+# Utility functions for segmentation
+
+def dice_coef(y_true, y_pred):
+    y_true_f = keras.flatten(y_true)
+    y_pred_f = keras.flatten(y_pred)
+    intersection = keras.sum(y_true_f * y_pred_f)
+    return (2. * intersection + 1) / (keras.sum(y_true_f) + keras.sum(y_pred_f) + 1)
+
+def dice_coef_loss(y_true, y_pred):
+    return -dice_coef(y_true, y_pred)
+
+def image_to_train(img):
+    npy = img / 255
+    npy = np.reshape(npy, npy.shape + (1,))
+    npy = np.reshape(npy,(1,) + npy.shape)
+    return npy
+
+def train_to_image(npy):
+    img = (npy[0,:, :, 0] * 255.).astype(np.uint8)
+    return img
+    
+
+# Main function for segmenting image
+
+def segment_image(segmentation_model, img_path, save_to = None):
+    
+    """
+Segment image using segmentation_model: extract lungs from image
+        
+Parameters:
+   - segmentation_model: trained model used for image segmentation 
+   - img_path: path of image to segment
+   - save_to (Optional): destination path for segmented_image. Image not saved if argument is not passed.
+   
+Returns:
+   - segmented image
+    """
+
+    pid, fileext = os.path.splitext(os.path.basename(img_path))
+    img = cv2.resize(cv2.imread(img_path,
+                                cv2.IMREAD_GRAYSCALE),
+                     (512, 512))
+    segm_ret = segmentation_model.predict(image_to_train(img),
+                                          verbose=0)
+    img = cv2.bitwise_and(img,
+                          img,
+                          mask=train_to_image(segm_ret))
+    if save_to is not None:
+        cv2.imwrite(os.path.join(save_to,
+                                 "%s.png" % pid),
+                    img)
+    return img
     
 
 # Models
@@ -260,7 +340,7 @@ Returns:
 model_smpl = Sequential()
 model_smpl.add(Conv2D(filters = 30,
                       kernel_size = (5, 5),
-                      input_shape = (224, 224, 1),
+                      input_shape = (224, 224, 3),
                       activation = 'relu',
                       padding = 'valid'))
 model_smpl.add(MaxPooling2D(pool_size = (2, 2)))
