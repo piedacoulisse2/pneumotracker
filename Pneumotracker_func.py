@@ -5,16 +5,27 @@ import pandas as pd
 import numpy as np
 import cv2
 from tqdm import tqdm
+import matplotlib.cm as cm
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
+from keras.preprocessing import image
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from keras.models import Model, Sequential, load_model
 from keras.layers import Dense, Dropout, Flatten, BatchNormalization, AveragePooling2D
 from keras.layers.convolutional import Conv2D, MaxPooling2D
 from keras.optimizers import Adam
+from keras.applications.imagenet_utils import decode_predictions
+
+import skimage
+from skimage.segmentation import mark_boundaries
+from skimage import io, transform
+from skimage.io import imread
+
+import lime
+from lime import lime_image
 
 def get_and_create_dirs():
     
@@ -331,6 +342,222 @@ Returns:
                     img)
     return img
     
+
+# Intrpretability functions
+# Grad-Cam
+
+def get_heatmap_gradcam(model, last_conv_layer_name, img_path = None, img = None, heatmap_quant = None, alpha = 0.4):
+"""
+Computes and returns Grad-Cam heatmap and superimposed image:
+    - Deactivates last convolution layer
+    - Computes gradcam heatmap
+    - Superimposes original image and heatmap
+    - Reactivates last convolution layer
+        
+Parameters:
+   - model: model for Grad-Cam
+   - last_conv_layer_name: name of last convolution layer from model
+   - img_path (Optional): path of image to interpret. Optional if img is passed
+   - img (Optional): image to interpret. Optional if img_path is passed
+   - heatmap_quant (Optional): if passed, quantile of heatmap pixel intesity to keep (between 0 and 1)
+   - alpha (Optional): opacity of superimposed heatmap
+   
+Returns:
+   - Superimposed image
+   - Heatmap   
+
+Example 1:
+    heatmap, gradcam = get_heatmap_gradcam(model = random_model,
+                                           last_conv_layer_name = 'conv2d_10',
+                                           img_path = r'./images/image_1.jpeg',
+                                           alpha = 0.4)
+    
+    Returns heatmap and all pixels of superimposed image from image "image_1.jpeg" located in "./images" with model "random_model", which last convolution layer is "conv2d_10"
+
+Example 2:
+    heatmap, gradcam = get_heatmap_gradcam(model = random_model,
+                                           last_conv_layer_name = 'conv2d_10',
+                                           img_path = r'./images/image_1.jpeg',
+                                           heatmap_quant = 0.75
+                                           alpha = 0.4)
+    
+    Returns heatmap and top 25% of pixels of superimposed image from image "image_1.jpeg" located in "./images" with model "random_model", which last convolution layer is "conv2d_10"
+"""
+
+    if (img_path is None) and (img is None):
+        print('One of "img_path" or "img" is required')
+        return None, None
+    elif img_path is not None:
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        
+    img_array = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))        
+    img_array = np.expand_dims(img_array, axis=0)
+    
+    model_activation = model.layers[-1].activation
+    model.layers[-1].activation = None
+    
+    grad_model = tf.keras.models.Model([model.inputs], [model.get_layer(last_conv_layer_name).output, model.output])
+    
+    with tf.GradientTape() as tape:
+        last_conv_layer_output, preds = grad_model(img_array)
+        pred_index = tf.argmax(preds[0])
+        class_channel = preds[:, pred_index]
+
+    grads = tape.gradient(class_channel, last_conv_layer_output)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    last_conv_layer_output = last_conv_layer_output[0]
+    heatmap = last_conv_layer_output @ pooled_grads[..., tf.newaxis]
+    heatmap = tf.squeeze(heatmap)
+    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+        
+    img = keras.preprocessing.image.img_to_array(img)
+
+    heatmap = np.uint8(255 * heatmap)
+
+    jet = cm.get_cmap("jet")
+
+    jet_colors = jet(np.arange(256))[:, :3]
+    jet_heatmap = jet_colors[heatmap]
+
+    jet_heatmap = keras.preprocessing.image.array_to_img(jet_heatmap)
+    jet_heatmap = jet_heatmap.resize((img.shape[1], img.shape[0]))
+    jet_heatmap = keras.preprocessing.image.img_to_array(jet_heatmap)
+    
+    if heatmap_quant is not None:
+        for i in range(3):
+            jet_heatmap[:, :, i] = np.where(jet_heatmap[:, :, i] > np.quantile(jet_heatmap[:, :, i], heatmap_quant), jet_heatmap[:, :, i], 0)
+
+    superimposed_img = jet_heatmap * alpha + img
+    superimposed_img = keras.preprocessing.image.array_to_img(superimposed_img)
+    
+    model.layers[-1].activation = model_activation
+
+    return heatmap, superimposed_img
+    
+# Lime
+
+def lime_heatmap(model, img_path = None, img = None, colorbar = True, explanation = None):
+"""
+Diplays lime heatmap for model and image passed
+
+Parameters:
+    - model: model for Lime computations
+    - img_path (Optional): path of image to interpret. Optional if img is passed
+    - img (Optional): image to interpret. Optional if img_path is passed
+    - colorbar (Optional): if True, colorbar is displayed next to heatmap
+    - explanation (Optional): used if passed, computed otherwise
+    
+Returns:
+    - Lime explanation
+    
+Example 1:
+
+    explanation1 = lime_heatmap(model = random_model,
+                                img_path = r'./images/image_1.jpeg',
+                                explanation = None)
+    Computes Lime explanation, displays lime heatmap with colorbar and returns explanation
+    
+Example 1:
+
+    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+
+    explanation1 = lime_heatmap(model = random_model,
+                                img = img,
+                                explanation = explanation1)
+    Uses explanation1 to diplay  lime heatmap with colorbar and returns explanation1
+"""
+    if (img_path is None) and (img is None):
+        print('One of "img_path" or "img" is required')
+        return None, None
+    elif img_path is not None:
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))
+    
+    img = np.expand_dims(img, axis=0)
+    
+    if explanation is None:
+        explainer = lime_image.LimeImageExplainer()
+        explanation = explainer.explain_instance(img[0].astype('double'), 
+                                                 model.predict,  
+                                                 top_labels=3, 
+                                                 hide_color=0, 
+                                                 num_samples=1000)
+                                                 
+    ind =  explanation.top_labels[0]
+    dict_heatmap = dict(explanation.local_exp[ind])
+    heatmap = np.vectorize(dict_heatmap.get)(explanation.segments)
+
+    temp_1, mask_1 = explanation.get_image_and_mask(explanation.top_labels[0], 
+                                                    positive_only=False, 
+                                                    num_features=1,
+                                                    hide_rest=False)
+                                                    
+    plt.imshow(heatmap, cmap = 'RdBu', vmin  = -heatmap.max(), vmax = heatmap.max())
+    
+    if colorbar:
+        plt.colorbar()
+    
+    return explanation
+
+def lime_outline(model, img_path = None, img = None, explanation = None):
+"""
+Diplays image superimposed with outline of Lime top label
+
+Parameters:
+    - model: model for Lime computations
+    - img_path (Optional): path of image to interpret. Optional if img is passed
+    - img (Optional): image to interpret. Optional if img_path is passed
+    - explanation (Optional): used if passed, computed otherwise
+    
+Returns:
+    - Lime explanation
+    
+Example 1:
+
+    explanation = lime_outline(model = random_model,
+                               img_path = r'./images/image_1.jpeg',
+                               explanation = None)
+    Computes Lime explanation, displays superimposed image and returns explanation
+    
+Example 2:
+
+    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+
+    explanation1 = lime_outline(model = random_model,
+                                img = img,
+                                explanation = explanation1)
+    Uses explanation1 to diplay superimposed image and returns explanation1
+"""
+    from skimage.segmentation import mark_boundaries
+    if (img_path is None) and (img is None):
+        print('One of "img_path" or "img" is required')
+        return None, None
+    elif img_path is not None:
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+    
+    img = skimage.transform.resize(img, (model.input.shape[1], model.input.shape[2], 3))    
+    img = image.img_to_array(img)
+    img = np.expand_dims(img, axis=0)
+    
+    if explanation is None:
+        explainer = lime_image.LimeImageExplainer()
+        explanation = explainer.explain_instance(img[0].astype('double'), 
+                                                 model.predict,  
+                                                 top_labels=3, 
+                                                 hide_color=0, 
+                                                 num_samples=1000)
+
+    temp_1, mask_1 = explanation.get_image_and_mask(explanation.top_labels[0], 
+                                                    positive_only=False, 
+                                                    num_features=1,
+                                                    hide_rest=False)
+                                                    
+    plt.imshow(mark_boundaries(temp_1, mask_1))
+
+    plt.axis('off')
+    
+    return explanation
+
 
 # Models
 # Variables containing models used in Pneumotracker project
