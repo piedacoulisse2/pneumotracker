@@ -37,17 +37,17 @@ Returns:
    - seg_path: path for segmented images
     """
 
-    print('Checks for paths for original and segmented images.\nOriginal and segmented images must be organized in the exact same structure (images in the same folders and sub-folders).\n')
+    print('Checks for paths for original and segmented images.\nOriginal and segmented images folders must be organized in the exact same structure (images in the same folders and sub-folders).\n')
     
     orig_path = None
 
     while orig_path is None:
-        orig_path = input('Input root path for original images:\n')
+        orig_path = input('Input root path for original images (default github folder):\n') or r'.\chest_xray'
         if not os.path.exists(orig_path):
             orig_path = None
             print('Path doesn\'t exist, please input a valid directory path.\n')
 
-    seg_path = input('\nInput root path for segmented images if exists or needs creation:\n')
+    seg_path = input('\nInput root path for segmented images if exists or needs to be created (default github folder):\n') or r'.\segmentation'
     if (seg_path is not None) and (not os.path.exists(seg_path)):
         create_dir = 'Z'
         while create_dir not in ['Y', 'N']:
@@ -61,8 +61,12 @@ Returns:
                 print('Unknown error while attempting to create directory.')
         else:
             print('Directory not created')
+    
+    orig_file_ext = input('\nWhat is the file extension for original images (default jpeg) ?\n').replace('.', '') or 'jpeg'
+    
+    seg_model = input('\nWhat is the path to the segmentation model checkpoint (default github folder) ?\n') or r'.\Models\unet_lung_seg.hdf5'
             
-    return orig_path, seg_path
+    return orig_path, seg_path, orig_file_ext, seg_model
 
 def build_df(path_orig, orig_img_ext, path_seg = None, seg_img_ext = None, df = None):
     
@@ -279,8 +283,12 @@ Returns:
     df_val['predicted_value'] = model.predict(test_generator)
     df_val['predicted_int'] = (df_val['predicted_value'] > 0.5).apply(int)
     df_val['predicted_str'] = df_val['predicted_int'].apply(lambda x: 'NORMAL' if x == 0 else 'PNEUMONIA')
+    
     class_report = pd.DataFrame(classification_report(df_val['Label_name'], df_val['predicted_str'], output_dict = True))
+    class_report = class_report.style.set_table_attributes("style='display:inline; font-size:110%; color:black; font-weight: bold'").set_caption('Classification report for model ' + checkpoint_name.replace('.h5', ''))
+    
     conf_matrix = pd.crosstab(df_val['Label_name'], df_val['predicted_str'], rownames=['Real'], colnames=['Predicted'])
+    conf_matrix = conf_matrix.style.set_table_attributes("style='display:inline; font-size:110%; color:black; font-weight: bold'").set_caption('Confusion matrix for model' + checkpoint_name.replace('.h5', ''))
     
     return model_eval, history, class_report, conf_matrix, model
 
@@ -347,7 +355,8 @@ Returns:
 # Grad-Cam
 
 def get_heatmap_gradcam(model, last_conv_layer_name, img_path = None, img = None, heatmap_quant = None, alpha = 0.4):
-"""
+    
+    """
 Computes and returns Grad-Cam heatmap and superimposed image:
     - Deactivates last convolution layer
     - Computes gradcam heatmap
@@ -382,8 +391,8 @@ Example 2:
                                            alpha = 0.4)
     
     Returns heatmap and top 25% of pixels of superimposed image from image "image_1.jpeg" located in "./images" with model "random_model", which last convolution layer is "conv2d_10"
-"""
-
+    """
+    
     if (img_path is None) and (img is None):
         print('One of "img_path" or "img" is required')
         return None, None
@@ -437,7 +446,8 @@ Example 2:
 # Lime
 
 def lime_heatmap(model, img_path = None, img = None, colorbar = True, explanation = None):
-"""
+    
+    """
 Diplays lime heatmap for model and image passed
 
 Parameters:
@@ -465,7 +475,8 @@ Example 1:
                                 img = img,
                                 explanation = explanation1)
     Uses explanation1 to diplay  lime heatmap with colorbar and returns explanation1
-"""
+    """
+    
     if (img_path is None) and (img is None):
         print('One of "img_path" or "img" is required')
         return None, None
@@ -500,7 +511,8 @@ Example 1:
     return explanation
 
 def lime_outline(model, img_path = None, img = None, explanation = None):
-"""
+
+    """
 Diplays image superimposed with outline of Lime top label
 
 Parameters:
@@ -527,7 +539,8 @@ Example 2:
                                 img = img,
                                 explanation = explanation1)
     Uses explanation1 to diplay superimposed image and returns explanation1
-"""
+    """
+    
     from skimage.segmentation import mark_boundaries
     if (img_path is None) and (img is None):
         print('One of "img_path" or "img" is required')
@@ -587,58 +600,58 @@ model_smpl.compile(optimizer = optimizer,
                    loss = 'binary_crossentropy',
                    metrics = ['accuracy'])
 
-# model_comp : complex model with 10 convolution layers and one dense
+# model_cmpl : complex model with 10 convolution layers and one dense
 
-model_comp = Sequential()    
-model_comp.add(Conv2D(filters = 16,
+model_cmpl = Sequential()    
+model_cmpl.add(Conv2D(filters = 16,
                       kernel_size = (3, 3),
                       input_shape = (224, 224, 3),
                       activation = 'relu'))
-model_comp.add(Conv2D(filters = 16,
+model_cmpl.add(Conv2D(filters = 16,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(AveragePooling2D(pool_size = (2, 2)))
-model_comp.add(BatchNormalization())    
-model_comp.add(Conv2D(filters = 32,
+model_cmpl.add(AveragePooling2D(pool_size = (2, 2)))
+model_cmpl.add(BatchNormalization())    
+model_cmpl.add(Conv2D(filters = 32,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(Conv2D(filters = 32,
+model_cmpl.add(Conv2D(filters = 32,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(AveragePooling2D(pool_size = (2, 2)))
-model_comp.add(BatchNormalization())
-model_comp.add(Conv2D(filters = 64,
+model_cmpl.add(AveragePooling2D(pool_size = (2, 2)))
+model_cmpl.add(BatchNormalization())
+model_cmpl.add(Conv2D(filters = 64,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(Conv2D(filters = 64,
+model_cmpl.add(Conv2D(filters = 64,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(AveragePooling2D(pool_size = (2, 2)))
-model_comp.add(BatchNormalization())
-model_comp.add(Conv2D(filters = 128,
+model_cmpl.add(AveragePooling2D(pool_size = (2, 2)))
+model_cmpl.add(BatchNormalization())
+model_cmpl.add(Conv2D(filters = 128,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(Conv2D(filters = 128,
+model_cmpl.add(Conv2D(filters = 128,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(AveragePooling2D(pool_size = (2, 2)))
-model_comp.add(BatchNormalization())
-model_comp.add(Conv2D(filters = 256,
+model_cmpl.add(AveragePooling2D(pool_size = (2, 2)))
+model_cmpl.add(BatchNormalization())
+model_cmpl.add(Conv2D(filters = 256,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(Conv2D(filters = 256,
+model_cmpl.add(Conv2D(filters = 256,
                       kernel_size = (3, 3),
                       activation = 'relu'))
-model_comp.add(AveragePooling2D(pool_size = (2, 2)))
-model_comp.add(BatchNormalization())
-model_comp.add(Flatten())
-model_comp.add(Dropout(0.2))
-model_comp.add(Dense(units = 380,
+model_cmpl.add(AveragePooling2D(pool_size = (2, 2)))
+model_cmpl.add(BatchNormalization())
+model_cmpl.add(Flatten())
+model_cmpl.add(Dropout(0.2))
+model_cmpl.add(Dense(units = 380,
                      activation = 'relu'))
-model_comp.add(Dropout(0.2))
-model_comp.add(Dense(units = 1,
+model_cmpl.add(Dropout(0.2))
+model_cmpl.add(Dense(units = 1,
                      activation = 'sigmoid'))
 optimizer = Adam()
-model_comp.compile(optimizer = optimizer,
+model_cmpl.compile(optimizer = optimizer,
                    loss = 'binary_crossentropy',
                    metrics = ['accuracy'])
