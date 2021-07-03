@@ -5,11 +5,16 @@ import pandas as pd
 import numpy as np
 import cv2
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import math
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
+import tensorflow as tf
+
+import keras
 from keras.preprocessing import image
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
@@ -127,7 +132,7 @@ Returns DataFrame df with columns:
     
     return df
     
-def build_train_model(X, Y, model, classes = 2, batch_size = 32, epochs = 20, checkpoint_name = 'checkpoint.h5', history_name = 'history', train_model = True):
+def build_train_model(df, X_colname, Y_colname, model, classes = 2, batch_size = 32, epochs = 20, checkpoint_name = 'checkpoint.h5', history_name = 'history', train_model = True, df_test_glob = None):
     
     """
 Builds, trains and evaluates model. Saves training history in a DataFrame and model in a checkpoint h5 file :
@@ -137,15 +142,17 @@ Builds, trains and evaluates model. Saves training history in a DataFrame and mo
     - Builds callbacks.
 
 Parameters:
-    - X: pandas Series containing filepaths to images
-    - Y: pandas Series containing labels for images
+    - df: DataFrame containing filepaths and classes
+    - X_colname: name of df column containing filepaths to images
+    - Y_colname: name of df column containing labels for images
     - model: model to train and evaluate
     - classes (Optional): number of classes, 2 by default (NORMAL & PNEUMONIA)
     - batch_size (Optional): batch_size for training, validation and testing datasets, 32 by default
     - epochs (Optional): number of epochs for model training, 20 by default
     - checkpoint_name (Optional): name for model training checkpoint, "checkpoint.h5" by default
     - history_name (Optional): name for history DataFrame, "checkpoint.h5" by default.
-    - train_model : model is trained if True, else simply loaded from checkpoint and metrics are computed
+    - train_model (Optional): model is trained if True, else simply loaded from checkpoint and metrics are computed, False by default.
+    - df_test_glob: DataFrame containing test images information. Created if None, else current model data added to df_test_glob
     
 Returns:
     - model evaluation
@@ -153,10 +160,12 @@ Returns:
     - classification_report
     - confusion matrix
     - model
+    - DataFrame of test images with predicted values
     """
 
     print('\nSplitting data')
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, stratify = Y, test_size = 0.30, random_state = 1234)
+    
+    X_train, X_test, y_train, y_test = train_test_split(df[X_colname], df[Y_colname], stratify = df[Y_colname], test_size = 0.30, random_state = 1234)
     X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, stratify = y_test, test_size = 0.50, random_state = 1234)
 
     df_train = pd.concat([X_train, y_train], axis = 1)
@@ -186,8 +195,8 @@ Returns:
 
     train_generator = gen.flow_from_dataframe(df_train,
                                               directory = None,
-                                              x_col = X.name,
-                                              y_col = Y.name,
+                                              x_col = X_colname,
+                                              y_col = Y_colname,
                                               target_size = image_size,
                                               color_mode = color_mode,
                                               batch_size = batch_size,
@@ -197,8 +206,8 @@ Returns:
 
     valid_generator = gen.flow_from_dataframe(df_test,
                                               directory = None,
-                                              x_col = X.name,
-                                              y_col = Y.name,
+                                              x_col = X_colname,
+                                              y_col = Y_colname,
                                               target_size = image_size,
                                               color_mode = color_mode,
                                               batch_size = batch_size,
@@ -207,8 +216,8 @@ Returns:
 
     test_generator = gen.flow_from_dataframe(df_val,
                                              directory = None,
-                                             x_col = X.name,
-                                             y_col = Y.name,
+                                             x_col = X_colname,
+                                             y_col = Y_colname,
                                              target_size = image_size,
                                              color_mode = color_mode,
                                              batch_size = batch_size,
@@ -280,17 +289,23 @@ Returns:
 
     print("Accuracy: " , model_eval[1]*100 , "%")
     
-    df_val['predicted_value'] = model.predict(test_generator)
-    df_val['predicted_int'] = (df_val['predicted_value'] > 0.5).apply(int)
-    df_val['predicted_str'] = df_val['predicted_int'].apply(lambda x: 'NORMAL' if x == 0 else 'PNEUMONIA')
+    colname = '_smpl' if len(model.layers) == len(model_smpl.layers) else '_cmpl'
+    colname += '_orig' if 'orig' in checkpoint_name else '_seg'
     
-    class_report = pd.DataFrame(classification_report(df_val['Label_name'], df_val['predicted_str'], output_dict = True))
+    if df_test_glob is None:
+        df_test_glob = df.iloc[df_val.index, :].copy()
+    
+    df_test_glob['predicted_value' + colname] = model.predict(test_generator)
+    df_test_glob['predicted_int' + colname] = (df_test_glob['predicted_value' + colname] > 0.5).apply(int)
+    df_test_glob['predicted_str' + colname] = df_test_glob['predicted_int' + colname].apply(lambda x: 'NORMAL' if x == 0 else 'PNEUMONIA')
+    
+    class_report = pd.DataFrame(classification_report(df_test_glob['Label_name'], df_test_glob['predicted_str' + colname], output_dict = True))
     class_report = class_report.style.set_table_attributes("style='display:inline; font-size:110%; color:black; font-weight: bold'").set_caption('Classification report for model ' + checkpoint_name.replace('.h5', ''))
     
-    conf_matrix = pd.crosstab(df_val['Label_name'], df_val['predicted_str'], rownames=['Real'], colnames=['Predicted'])
+    conf_matrix = pd.crosstab(df_test_glob['Label_name'], df_test_glob['predicted_str' + colname], rownames=['Real'], colnames=['Predicted'])
     conf_matrix = conf_matrix.style.set_table_attributes("style='display:inline; font-size:110%; color:black; font-weight: bold'").set_caption('Confusion matrix for model' + checkpoint_name.replace('.h5', ''))
     
-    return model_eval, history, class_report, conf_matrix, model
+    return model_eval, history, class_report, conf_matrix, model, df_test_glob
 
     
 # Functions for image segmentation
@@ -354,7 +369,7 @@ Returns:
 # Intrpretability functions
 # Grad-Cam
 
-def get_heatmap_gradcam(model, last_conv_layer_name, img_path = None, img = None, heatmap_quant = None, alpha = 0.4):
+def get_heatmap_gradcam(model, last_conv_layer_name, img_path = None, img = None, heatmap_quant = None, alpha = 0.7):
     
     """
 Computes and returns Grad-Cam heatmap and superimposed image:
@@ -368,7 +383,7 @@ Parameters:
    - last_conv_layer_name: name of last convolution layer from model
    - img_path (Optional): path of image to interpret. Optional if img is passed
    - img (Optional): image to interpret. Optional if img_path is passed
-   - heatmap_quant (Optional): if passed, quantile of heatmap pixel intesity to keep (between 0 and 1)
+   - heatmap_quant (Optional): if passed, quantile of heatmap pixel intensity to keep (between 0 and 1)
    - alpha (Optional): opacity of superimposed heatmap
    
 Returns:
@@ -484,6 +499,7 @@ Example 1:
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
         img = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))
     
+    img = img / 255
     img = np.expand_dims(img, axis=0)
     
     if explanation is None:
@@ -497,13 +513,9 @@ Example 1:
     ind =  explanation.top_labels[0]
     dict_heatmap = dict(explanation.local_exp[ind])
     heatmap = np.vectorize(dict_heatmap.get)(explanation.segments)
-
-    temp_1, mask_1 = explanation.get_image_and_mask(explanation.top_labels[0], 
-                                                    positive_only=False, 
-                                                    num_features=1,
-                                                    hide_rest=False)
                                                     
     plt.imshow(heatmap, cmap = 'RdBu', vmin  = -heatmap.max(), vmax = heatmap.max())
+    plt.axis('off')
     
     if colorbar:
         plt.colorbar()
@@ -542,14 +554,15 @@ Example 2:
     """
     
     from skimage.segmentation import mark_boundaries
+    
     if (img_path is None) and (img is None):
         print('One of "img_path" or "img" is required')
         return None, None
     elif img_path is not None:
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))
     
-    img = skimage.transform.resize(img, (model.input.shape[1], model.input.shape[2], 3))    
-    img = image.img_to_array(img)
+    img = img / 255
     img = np.expand_dims(img, axis=0)
     
     if explanation is None:
@@ -566,11 +579,82 @@ Example 2:
                                                     hide_rest=False)
                                                     
     plt.imshow(mark_boundaries(temp_1, mask_1))
-
     plt.axis('off')
     
     return explanation
 
+
+# Interpretability grid
+
+def plot_interpretability_grid(algo, model, df, filepath_col, filename_col, class_col, pred_col, img_list = None, nb_img = None, last_conv_layer_name = None, grad_quant = None, alpha = 0.7):
+
+    """
+Plots image grid (4 columns, nb_img/4 rows) of Lime or Grad-Cam interpreted images.
+Grad-Cam: plots heatmap superimposed over original image on first row and original image on second row
+Lime: plots heatmap on first row and outlined image on second row
+
+Parameters:
+    - algo: 'lime' or 'gradcam'
+    - model: model for Lime and Grad-Cam interpretation
+    - df: Pandas DataFrame containing filepath and class of images
+    - filepath_col: name of df column containing images filepath
+    - filename_col: name of df column containing images filenames
+    - class_col: name of df column containing images class
+    - pred_col: name of df column containing predicted class
+    - img_list (Optional): list of image filenames with extension. Either img_list ior nb_img must be passed
+    - nb_img (Optional): number of images to plot. Either img_list ior nb_img must be passed
+    - last_conv_layer_name (Optional): last convolution layer name for Grad-Cam. Required if algo = 'gradcam'
+    - grad_quant (Optional): if passed, quantile of heatmap pixel intensity to keep (between 0 and 1) for Grad-Cam
+    - alpha (Optional): opacity for Grad-Cam superimposed image
+    
+Example 1:
+    img_list = ['image1.jpeg', 'image2.jpeg']
+    plot_interpretability_grid('lime', model, df, 'filepath', 'class', 'pred_class',  img_list = img_list)
+    Plots subplot 2 rows, 2 columns with lime heatmap on first row and lime outline on second row with images from df with filepath in column 'filepath' and class in column 'class' and predicted class in column 'pred_class' of df.
+    
+Example 2:
+    nb_img = 4
+    plot_interpretability_grid('gradcam', model, df, 'filepath', 'class', 'pred_class', img_list = img_list, 'conv2D_1')
+    Plots subplot 2 rows, 4 column with original image on first row and Grad-Cam superimposed image on second row with images from df with filepath in column 'filepath', class in column 'class' and predicted class in column 'pred_class' of df.
+    """
+    
+    if algo not in ['lime', 'gradcam']:
+        print('algo must be "lime" of "gradcam". Re-run function with correct "algo" parameter.')
+        return
+    elif (algo == 'gradcam') and (last_conv_layer_name is None):
+        print('"last_conv_layer_name" is required for "gradcam" algo. Re-run function with correct "last_conv_layer_name" parameter.')
+        return
+    
+    if (img_list is None) and (nb_img is None):
+        print("img_list or img must me passed. Re-run function with one of these parameters.")
+        return
+    elif img_list is not None:
+        nb_img = len(img_list)
+    else:
+        img_list = list(df.iloc[np.random.randint(0, df.shape[0], nb_img), :][filename_col])
+        
+    nb_cols = min(nb_img, 4)
+    nb_rows = math.ceil(nb_img/4) * 2
+    
+    plt.figure(figsize = (nb_cols * 5, nb_rows * 5))
+    for i, j in enumerate(list(df[df[filename_col].isin(img_list)][filepath_col])):
+        if algo == 'gradcam':
+            plt.subplot(nb_rows, nb_cols, i + 1)
+            plt.imshow(cv2.resize(cv2.imread(j, cv2.IMREAD_COLOR), (model.input.shape[1], model.input.shape[2])))
+            plt.axis('off')
+            plt.title(str('Image "' + img_list[i] + '"\nReal Class:' + df[df[filepath_col] == j][class_col].iloc[0] + '\nPredicted: ' + df[df[filepath_col] == j][pred_col].iloc[0]))
+            plt.subplot(nb_rows, nb_cols, i + nb_cols + 1)
+            heatmap, superimposed_img = get_heatmap_gradcam(model, last_conv_layer_name, img_path = j, heatmap_quant = grad_quant, alpha = alpha)
+            plt.imshow(superimposed_img)
+            plt.axis('off')
+        if algo == 'lime':            
+            plt.subplot(nb_rows, nb_cols, i + 1)
+            colorb = True if (i + 1) % nb_cols == 0 else False
+            explanation = lime_heatmap(model, img_path = j, colorbar = colorb, explanation = None)
+            plt.title(str('Image "' + img_list[i] + '\nReal Class:' + df[df[filepath_col] == j][class_col].iloc[0] + '\nPredicted: ' + df[df[filepath_col] == j][pred_col].iloc[0]))
+            plt.subplot(nb_rows, nb_cols, i + nb_cols + 1)
+            explanation = lime_outline(model, img_path = j, explanation = explanation)
+    
 
 # Models
 # Variables containing models used in Pneumotracker project
