@@ -10,7 +10,12 @@ import matplotlib.cm as cm
 import math
 
 from sklearn.model_selection import train_test_split
+from sklearn.manifold import TSNE
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.metrics import classification_report
+from sklearn.svm import SVC
+
+from mlxtend.plotting import plot_decision_regions
 
 import tensorflow as tf
 
@@ -70,20 +75,25 @@ Returns:
     orig_file_ext = input('\nWhat is the file extension for original images (default jpeg) ?\n').replace('.', '') or 'jpeg'
     
     seg_model = input('\nWhat is the path to the segmentation model checkpoint (default github folder) ?\n') or r'.\Models\unet_lung_seg.hdf5'
+    
+    seg_file_ext = input('\nWhat is the file extension for segmented images (default png) ?\n').replace('.', '') or 'png'
             
-    return orig_path, seg_path, orig_file_ext, seg_model
+    return orig_path, seg_path, orig_file_ext, seg_model, seg_file_ext
 
-def build_df(path_orig, orig_img_ext, path_seg = None, seg_img_ext = None, df = None):
+
+# Build DataFrame of dataset information
+
+def build_df(path_orig = r'.\chest_xray', orig_file_ext = 'jpeg', path_seg = r'.\segmentation', seg_file_ext = 'png', save_path = '.\df_all.csv'):
     
     """
-Build DataFrame for model training/validation
+Build or reads DataFrame for model training/validation and saves to "save_path" if passed
         
 Parameter :
-   - path_orig: root path for original images, which can be organized in sub-folders
-   - orig_img_ext: extension of original images files
+   - path_orig (Optional): root path for original images, which can be organized in sub-folders
+   - orig_file_ext (Optional): extension of original images files
    - path_seg (Optional): root path for original images, which can be organized in sub-folders
-   - seg_img_ext (Optional): root path for original images, which can be organized in sub-folders
-   - df (Optional): if passed, Filename_seg and Filepath_seg will be added
+   - seg_file_ext (Optional): root path for original images, which can be organized in sub-folders
+   - save_path (Optional): path to read or save DataFrame
    
 Returns DataFrame df with columns:
    - Label_name: "NORMAL" or "PNEUMONIA"
@@ -95,42 +105,197 @@ Returns DataFrame df with columns:
    - Filename_seg: filename of segmented image with extension
    - Filepath_seg: full path of segmented image (directory + filename)
     """
+       
+    read_df = 'C'
+    list_df = [] 
     
-    list_df = []
-    
-    if df is not None:
-        if (path_seg is None) or (seg_img_ext is None):
-            print('Arguments path_seg and seg_img_ext are mandatory if df is passed.')
-            print('Execute function with mandatory parameters.')
+    if os.path.exists(save_path):
+        read_df = input('DataFrame was found, would you like to read it (R) or recreate it (C) (default Read)?\n') or 'R'
+        if read_df == 'R':
+            df = pd.read_csv(save_path, index_col = 0)
             return df
-        else:
-            df['Filename_seg'] = df['Filename_orig'].apply(lambda x: x.replace(orig_img_ext, seg_img_ext))
-            df['Filepath_seg'] = df['Filepath_orig'].apply(lambda x: x.replace(path_orig, path_seg).replace(orig_img_ext, seg_img_ext))
-    else:
+    
+    if read_df == 'C':
         for dirname, _, filenames in os.walk(path_orig):
             for filename in tqdm(filenames, disable=len(filenames)==0):
-                if ('.' + orig_img_ext) in filename:
+                if ('.' + orig_file_ext) in filename:
                     list_val = []
                     list_val.append('PNEUMONIA' if 'PNEUMONIA' in dirname else 'NORMAL')
                     list_val.append(1 if 'PNEUMONIA' in dirname else 0)
                     list_val.append('bacteria' if 'bacteria' in filename.lower() else 'virus' if 'virus' in filename.lower() else 'normal')
                     list_val.append(1 if 'bacteria' in filename.lower() else 2 if 'virus' in filename.lower() else 0)
                     list_val.append(filename)
-                    list_val.append(os.path.join(dirname, filename))
-                    
-                    if (path_seg is not None) and (seg_img_ext is not None):
-                        list_val.append(filename.replace(orig_img_ext, seg_img_ext))
-                        list_val.append(os.path.join(dirname.replace(path_orig, path_seg), filename.replace(orig_img_ext, seg_img_ext)))
-                    else:
-                        list_val += ['', '']
-                    
+                    list_val.append(os.path.join(dirname, filename))                        
+                    list_val.append(filename.replace(orig_file_ext, seg_file_ext))
+                    list_val.append(os.path.join(dirname.replace(path_orig, path_seg), filename.replace(orig_file_ext, seg_file_ext)))
                     list_df.append(list_val)
 
         df = pd.DataFrame(list_df, columns = ['Label_name', 'Label_int', 'Label_pathology', 'Label_pathology_int', 'Filename_orig', 'Filepath_orig', 'Filename_seg', 'Filepath_seg'])
+        df.to_csv(save_path)
         
     print('Done')
     
     return df
+
+
+# Add resized image to DataFrame
+    
+def add_resized_image(df, filepath_col, size = (24, 24), save_path = '.\df_all_resized_24.csv'):
+
+    """
+Adds resized and reshaped images to dataframe
+
+Parameters:
+    - df: 
+    - filepath_col: 
+    - size (Optional):
+    - save_path (Optional):
+    
+Returns:
+    - DataFrame with resized images
+    
+Example1:
+    df_orig_resized = add_resized_image(df = df.loc[:, ['Label_name', 'Label_int', 'Filepath_orig']].copy(),
+                                    filepath_col = 'Filepath_orig',
+                                    size = (24, 24),
+                                    save_path = '.\df_orig_resized_24.csv')
+    Returns df passed as argument with columns containing resized and reshaped images.
+    """
+    
+    read_df = 'C'
+    
+    if os.path.exists(save_path):
+        read_df = input('DataFrame was found, would you like to read it (R) or recreate it (C) (default Read)?\n') or 'R'
+        if read_df == 'R':
+            new_cols = list(df.columns) + list(np.arange(0, size[0] * size[1]))
+            df = pd.read_csv(save_path, index_col = 0)
+            df.columns = new_cols
+            return df
+    
+    if read_df == 'C':
+        for i in np.arange(0, size[0] * size[1]):
+            df[i] = np.nan
+        
+        for index, row in df.iterrows():
+            img_res = cv2.resize(cv2.imread(row[filepath_col], cv2.IMREAD_GRAYSCALE), size)
+            df.loc[index, 0: (size[0] * size[1] - 1)] = np.array(img_res).reshape(size[0] * size[1])
+            
+        df.to_csv(save_path)
+        
+    return df
+
+
+# Plot TSNE
+
+def plot_tsne_svc(img_df, labels, labels_dict, title = 'SVC decision regions for TSNE reduced images'):
+
+    """
+Plot 2-Dimension TSNE with SVC decision region.
+
+Parameters:
+    - img_df: DataFrame containing resized reshaped images
+    - labels: Series containing one-hot encoded labels
+    - labels_dict: dictionary containing one_hot encoded labels and corrsponding original labels
+    - title (Optional): title for graph
+    
+Example 1:
+    plot_tsne_svc(df_orig_resized.loc[:, 0:(img_re_size[0] * img_re_size[0] - 1)],
+                  df_orig_resized['Label_int'],
+                  {0 : 'Normal', 1 : 'Pneumonia'},
+                  'SVC decision regions for TSNE reduced original images')
+    """
+
+    tsne = TSNE(n_components = 2, method = 'barnes_hut')
+    dataTSNE = tsne.fit_transform(img_df)
+
+    X_train_TSNE, X_test_TSNE, y_train_tsne, y_test_tsne = train_test_split(dataTSNE,
+                                                                            labels,
+                                                                            test_size = 0.3,
+                                                                            random_state = 123)
+                                                                            
+    svm = SVC(C = 1.0,
+              gamma = 'auto',
+              kernel = 'rbf')
+              
+    svm.fit(X_train_TSNE,
+            y_train_tsne)
+
+    scatter_kwargs = {'s': 120, 'edgecolor': None, 'alpha': 0.7}
+
+    fig = plt.figure(figsize = (30, 15))
+    
+    ax = plot_decision_regions(X_test_TSNE,
+                               np.array(y_test_tsne),
+                               clf = svm,
+                               legend = 0,
+                               colors = 'red,blue',
+                               scatter_kwargs = scatter_kwargs)
+    
+    handles, labels = ax.get_legend_handles_labels()
+    ax.set_title(title,
+                 pad = 20)                       
+    ax.legend(handles,
+              [labels_dict[0], labels_dict[1]],
+              framealpha=0.3,
+              scatterpoints=1,
+              fontsize = 'xx-large')
+
+    plt.show()
+
+
+# Plot LDA
+
+def plot_lda(img_df, labels, labels_dict, title = '1D projection of images using LDA'):
+
+    """
+Plot 1 dimension LDA.
+
+Parameters:
+    - img_df: DataFrame containing resized reshaped images
+    - labels: Series containing one-hot encoded labels
+    - labels_dict: dictionary containing one_hot encoded labels and corrsponding original labels
+    - title (Optional): title for graph
+    
+Example 1:
+    plot_tsne_svc(df_orig_resized.loc[:, 0:(img_re_size[0] * img_re_size[0] - 1)],
+                  df_orig_resized['Label_int'],
+                  {0 : 'Normal', 1 : 'Pneumonia'},
+                  '1D projection of original images using LDA')
+    """
+
+    X_train, X_test, y_train, y_test = train_test_split(img_df,
+                                                        labels,
+                                                        stratify = labels,
+                                                        test_size = 0.2,
+                                                        random_state = 123)
+                                                        
+    lda = LDA()
+    X_train_lda = lda.fit_transform(X_train, y_train)
+    X_test_lda = lda.transform(X_test)
+    
+    fig = plt.figure(figsize = (30, 2))
+
+    ax = fig.add_subplot(111)
+
+    ax.scatter(X_train_lda[:, 0][y_train == 0], np.ones(X_train_lda[:, 0][y_train == 0].shape[0]) + 0.25, c = 'r', marker = 's', s = 10, label = labels_dict[0])
+    ax.scatter(X_train_lda[:, 0][y_train == 1], np.ones(X_train_lda[:, 0][y_train == 1].shape[0]) - 0.25, c = 'b', marker = '^', s = 10, label = labels_dict[1])
+
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles,
+              labels,
+              framealpha=0.3,
+              scatterpoints=1,
+              fontsize = 'xx-large')
+    ax.set_title(title,
+                 pad = 20)
+    ax.axes.yaxis.set_visible(False)
+    plt.ylim([0.5, 1.5])
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+
+    plt.show()
+    
     
 def build_train_model(df, X_colname, Y_colname, model, classes = 2, batch_size = 32, epochs = 20, checkpoint_name = 'checkpoint.h5', history_name = 'history', train_model = True, df_test_glob = None):
     
@@ -323,6 +488,7 @@ def dice_coef(y_true, y_pred):
 def dice_coef_loss(y_true, y_pred):
     return -dice_coef(y_true, y_pred)
 
+
 def image_to_train(img):
     npy = img / 255
     npy = np.reshape(npy, npy.shape + (1,))
@@ -336,7 +502,7 @@ def train_to_image(npy):
 
 # Main function for segmenting image
 
-def segment_image(segmentation_model, img_path, save_to = None):
+def segment_image(segmentation_model, img_path, seg_img_ext, save_to = None):
     
     """
 Segment image using segmentation_model: extract lungs from image
@@ -344,6 +510,7 @@ Segment image using segmentation_model: extract lungs from image
 Parameters:
    - segmentation_model: trained model used for image segmentation 
    - img_path: path of image to segment
+   - seg_img_ext: extension of segmented image
    - save_to (Optional): destination path for segmented_image. Image not saved if argument is not passed.
    
 Returns:
@@ -361,7 +528,7 @@ Returns:
                           mask=train_to_image(segm_ret))
     if save_to is not None:
         cv2.imwrite(os.path.join(save_to,
-                                 "%s.png" % pid),
+                                 str("%s." + seg_img_ext) % pid),
                     img)
     return img
     
@@ -458,6 +625,7 @@ Example 2:
 
     return heatmap, superimposed_img
     
+    
 # Lime
 
 def lime_heatmap(model, img_path = None, img = None, colorbar = True, explanation = None):
@@ -521,6 +689,7 @@ Example 1:
         plt.colorbar()
     
     return explanation
+
 
 def lime_outline(model, img_path = None, img = None, explanation = None):
 
