@@ -729,8 +729,8 @@ Example 2:
         return None, None
     elif img_path is not None:
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        img = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))
-    
+        
+    img = cv2.resize(img, (model.input.shape[1], model.input.shape[2]))
     img = img / 255
     img = np.expand_dims(img, axis=0)
     
