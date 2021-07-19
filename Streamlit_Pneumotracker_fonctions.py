@@ -137,7 +137,7 @@ def lancementModel(model,metrics,X_train, Y_train,X_test,Y_test):
     scores = model.evaluate(X_test, Y_test)
 
 def importerHistorique(adresse):
-    r = pd.read_json(adresse)
+    r = pd.read_csv(adresse)
     return r
 
 def print_results(y_test, y_pred):
@@ -166,13 +166,13 @@ def print_results(y_test, y_pred):
 def printHistorique(history,epochs):
 
     epochs_array = [i for i in range(epochs)]
-    fig, ax = plt.subplots(1, 3)
-    train_precision = history['precision']
-    train_recall = history['recall']
+    fig, ax = plt.subplots(1, 2)
+    train_precision = history['accuracy']
+    #train_recall = history['recall']
     train_loss = history['loss']
 
-    val_precision = history['val_precision']
-    val_recall = history['val_recall']
+    val_precision = history['val_accuracy']
+    #val_recall = history['val_recall']
     val_loss = history['val_loss']
     fig.set_size_inches(20, 5)
 
@@ -192,13 +192,13 @@ def printHistorique(history,epochs):
     ax[1].set_ylabel('Precision')
     ax[1].grid(True)
 
-    ax[2].plot(epochs_array, train_recall, 'go-', label='Training Recall')
-    ax[2].plot(epochs_array, val_recall, 'ro-', label='Validation Recall')
-    ax[2].set_title('Training & Validation Recall')
-    ax[2].legend()
-    ax[2].set_xlabel('Epochs')
-    ax[2].set_ylabel('Recall')
-    ax[2].grid(True)
+    # ax[2].plot(epochs_array, train_recall, 'go-', label='Training Recall')
+    # ax[2].plot(epochs_array, val_recall, 'ro-', label='Validation Recall')
+    # ax[2].set_title('Training & Validation Recall')
+    # ax[2].legend()
+    # ax[2].set_xlabel('Epochs')
+    # ax[2].set_ylabel('Recall')
+    # ax[2].grid(True)
 
     st.pyplot(fig)
 
@@ -259,23 +259,44 @@ def printImage_correct(y_test,y_pred,x_test,IMG_SIZE):
 def importerImage():
     return 0
 
-def detailModeleUtilise(model_pneumonie,IMG_SIZE):
+def detailModeleUtilise(model_pneumonie,IMG_SIZE,num_model):
 
-    agree = st.checkbox('Afficher tous les détails du modèle (plus long)')
+    #   agree = st.checkbox('Afficher tous les détails du modèle (plus long)')
     #Lancement du modèle.
-    epochs = 45
+    epochs = 20
     #model = keras.models.load_model("model_pneumonie_1_KAGGLE.h5") Modèle Simple initial
-    historique = importerHistorique("./Dfs/historique_model.json")
-    #Streamlit affichage des résultats du modèle.
-    printHistorique(historique,epochs)
-    printAccuracy(historique, epochs)
-    if agree:
-        X_train, X_test, Y_train, Y_test = importerImages()
-        predictions = model_pneumonie.predict(x=X_test)
-        y_pred = np.round(predictions).reshape(1, -1)[0]
-        print_results(Y_test, y_pred)
-        printImage_incorrect(Y_test,y_pred,X_test,IMG_SIZE)
-        printImage_correct(Y_test,y_pred,X_test,IMG_SIZE)
+    if num_model == 2:
+        historique = importerHistorique("./Models/history_complex_orig_224_rgb.csv")
+        #st.dataframe(historique)
+        # Streamlit affichage des résultats du modèle.
+        st.subheader("Graphiques d'évolution de la fonction de perte et de la précision en fonction des épopés")
+        printHistorique(historique, epochs)
+        printAccuracy(historique, epochs)
+
+
+    matrice_confusion = pd.read_csv("./Dfs/classe confusion.csv",sep=";",index_col=0)
+
+    rapport_classification = pd.read_csv("./Dfs/rapport_classification.csv",sep=";",index_col=0)
+
+    st.subheader("Matrice de confusion du modèle")
+    st.dataframe(matrice_confusion)
+    st.subheader("Détails des performances du modèle")
+    st.dataframe(rapport_classification)
+
+    st.subheader("Palette d'images avec Grad-Cam")
+    st.image("./Dfs/Détail du modele GRADCAM.png")
+    st.subheader("Palette d'images avec Lime")
+    st.image("./Dfs/Détail du modele LIME.png")
+
+
+
+    # if agree:
+    #     X_train, X_test, Y_train, Y_test = importerImages()
+    #     predictions = model_pneumonie.predict(x=X_test)
+    #     y_pred = np.round(predictions).reshape(1, -1)[0]
+    #     print_results(Y_test, y_pred)
+    #     printImage_incorrect(Y_test,y_pred,X_test,IMG_SIZE)
+    #     printImage_correct(Y_test,y_pred,X_test,IMG_SIZE)
 
 def pretraitementImage(uploaded_file_pred,color_on,ISIZE):
     file_bytes = np.asarray(bytearray(uploaded_file_pred), dtype=np.uint8)
@@ -297,10 +318,24 @@ def pretraitementImage(uploaded_file_pred,color_on,ISIZE):
 def pretraitementImage224(uploaded_file_pred,color_on):
     file_bytes2 = np.asarray(bytearray(uploaded_file_pred), dtype=np.uint8)
     opencv_image2 = cv2.imdecode(file_bytes2, cv2.IMREAD_COLOR)
-
-    st.image(opencv_image2, caption='Image chargée origiale')
+    st.subheader("Affichage de l'image importée dans le modèle")
+    st.write("")
+    st.image(opencv_image2, caption='Image chargée originale')
     imageResize = cv2.resize(opencv_image2, (224, 224))
-    st.image(imageResize, caption='Image chargée redimensionnée')
+
+    col1, col2, col3 = st.beta_columns([1, 6, 1])
+
+    with col1:
+        st.write("")
+
+    with col2:
+        st.image(imageResize, caption='Image chargée redimensionnée')
+
+    with col3:
+        st.write("")
+
+
+
     l = []
     l.append(imageResize)
     image255 = np.array(np.array(l)) / 255
