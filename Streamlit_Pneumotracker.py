@@ -160,7 +160,7 @@ if add_selectbox == "Détection Pneumonie": # Si l'utilisateur choisi la détect
 
 
         else:
-            st.write("L'image n'est pas une radio complète des poumons d'un enfant. (_certitude de ",(1 - int(predictions_Xray))* 100,"%_)")
+            st.write("L'image n'est pas une radio complète des poumons. (_certitude de ",(1 - int(predictions_Xray))* 100,"%_)")
 
 elif add_selectbox == "Détection Xray": #Page de détection de radio des poumons avec une image
     st.title("Détection d'une image de radio des poumons d'enfant")
