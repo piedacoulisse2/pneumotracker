@@ -304,7 +304,7 @@ elif add_selectbox == "Statistique":
     df =pd.read_csv(r'.\Dfs\df_all.csv',index_col=0)
     df_stats = pd.read_csv(r'.\Dfs\df_stats.csv',index_col=0)
 
-    st.dataframe(df_stats)
+    st.dataframe(df_stats.head(10))
 
     st.subheader("II. Mean pixel intensity")
 
