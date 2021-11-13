@@ -3,7 +3,13 @@ import streamlit as st
 import pandas as pd
 import cv2
 import os
+
+import tensorflow as tf
+from tensorflow import keras
+
 from keras.models import Model, Sequential, load_model
+from tensorflow.keras.optimizers import Adam  
+
 from tensorflow.keras.layers import Flatten, Conv2D, Activation, Dense, Dropout, MaxPooling2D
 import skimage
 import tensorflow as tf
@@ -23,7 +29,7 @@ from lime import lime_image, explanation
 import matplotlib.patches as mpatches
 from sklearn.metrics import roc_curve, roc_auc_score, precision_score, recall_score, f1_score, accuracy_score, confusion_matrix
 from bokeh.plotting import figure
-import keras
+
 #-----Model de Deep Leaning------
 @st.cache
 def importerImages():

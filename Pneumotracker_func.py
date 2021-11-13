@@ -26,7 +26,10 @@ from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from keras.models import Model, Sequential, load_model
 from keras.layers import Dense, Dropout, Flatten, BatchNormalization, AveragePooling2D
 from keras.layers.convolutional import Conv2D, MaxPooling2D
-from keras.optimizers import Adam
+#Correction nov 2021
+#from keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam  
+
 from keras.applications.imagenet_utils import decode_predictions
 
 import skimage
